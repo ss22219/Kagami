@@ -36,7 +36,7 @@ public static class Command
 
         try
         {
-            MessageBuilder? reply = null;
+            MessageBuilder reply = null;
             {
                 if (textChain.Content.StartsWith("/help"))
                     reply = OnCommandHelp(textChain);
@@ -118,7 +118,7 @@ public static class Command
     /// </summary>
     /// <param name="chain"></param>
     /// <returns></returns>
-    public static MessageBuilder OnCommandPing(TextChain? chain)
+    public static MessageBuilder OnCommandPing(TextChain chain)
         => Text("Hello, I'm Kagami");
 
     /// <summary>
