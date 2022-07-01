@@ -2,11 +2,12 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
-using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.WebUtilities;
+using MiHoYoAuth.Dtos;
+using MiHoYoAuth.Utils;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -30,7 +31,6 @@ namespace MiHoYoAuth
                 postBody: BuildFormBody.Add("mmt_type", "1").Add("scene_type", "1").AddTimestamp("now").ToHttpContent()
             ).GetJsonData().CheckStatus().GetAsJsonObject("mmt_data");
 
-
         public static Task<JToken> LoginByMobileCaptcha(
             string mobile,
             string code,
@@ -45,7 +45,6 @@ namespace MiHoYoAuth
                     .ToHttpContent()
             ).GetJsonData().CheckStatus();
 
-
         public static Task<JToken> CreateMobileCaptcha(
             string phoneNumber,
             CaptchaData cData,
@@ -58,7 +57,7 @@ namespace MiHoYoAuth
                     .AddCaptchaData(cData).ToHttpContent()
             ).GetJsonData().CheckStatus();
 
-        public static Task<JToken> LoginByPassword(
+        public static Task<LoginResult> LoginByPassword(
             string account,
             string encryptedPassword,
             CaptchaData cData,
@@ -69,8 +68,7 @@ namespace MiHoYoAuth
                     .Add("password", encryptedPassword).Add("is_crypto", "true").AddTimestamp().AddCaptchaData(cData)
                     .ToHttpContent(),
                 httpClient: httpClient
-            ).GetJsonData().CheckStatus();
-
+            ).GetJsonData().CheckStatus().GetAsJsonObject<LoginResult>("account_info");
 
         public static Task<JToken> ScanQrCode(string codeUrl, string deviceId, HttpClient? httpClient = null)
         {
@@ -87,21 +85,62 @@ namespace MiHoYoAuth
             ).CheckRetCode();
         }
 
-        public static Task<Dictionary<string, string>> GetMultiTokenByLoginTicket(string uid, string ticket) =>
+        public static Task<JToken> ConfirmQrCode(
+            string codeUrl,
+            string uid,
+            string gameToken,
+            string deviceId,
+            HttpClient? httpClient = null
+        )
+        {
+            var urlParams = ParseQrCodeUrl(codeUrl);
+            return GetJson(
+                    url: $"{SDKAPI}/hk4e_cn/combo/panda/qrcode/confirm",
+                    postBody: JsonBodyOf(new
+                    {
+                        app_id = urlParams["app_id"],
+                        ticket = urlParams["ticket"],
+                        device = deviceId,
+                        payload = new
+                        {
+                            proto = "Account",
+                            raw = JsonConvert.SerializeObject(new
+                            {
+                                uid = uid,
+                                token = gameToken
+                            })
+                        }
+                    }),
+                    httpClient: httpClient)
+                .CheckRetCode();
+        }
+
+        public static Task<string> GetGameToken(string uid, string sToken, HttpClient? httpClient = null) =>
+            GetJson(
+                    $"{TAKUMI_AUTH_API}/getGameToken?stoken={sToken}&uid={uid}", httpClient
+                ).CheckRetCode()
+                .GetJsonData()
+                .ContinueWith(t =>
+                    t.Result["game_token"].ToString());
+
+        public static Task<MultiTokenResult> GetMultiTokenByLoginTicket(string uid, string ticket) =>
             GetJson(
                     $"{TAKUMI_AUTH_API}/getMultiTokenByLoginTicket?login_ticket={ticket}&token_types=3&uid={uid}")
                 .CheckRetCode()
+                .GetJsonData()
                 .GetAsJsonArray("list")
                 .ContinueWith(t =>
-                    t.Result.ToDictionary(o => o["name"]!.ToString(), o => o["token"]!.ToString()));
+                    t.Result.ToDictionary(o => o["name"]!.ToString(), o => o["token"]!.ToString()))
+                .ContinueWith(t => new MultiTokenResult { LToken = t.Result["ltoken"], SToken = t.Result["stoken"] });
 
         public static string EncryptedPassword(string password)
         {
             using var rsa = RSA.Create();
-            rsa.ImportRSAPublicKey(PublicKey, out var _);
-            return Convert.ToBase64String(rsa.Encrypt(Encoding.UTF8.GetBytes(password), RSAEncryptionPadding.Pkcs1));
+            rsa.ImportSubjectPublicKeyInfo(PublicKey, out var _);
+            return Convert.ToBase64String(rsa.Encrypt(Encoding.UTF8.GetBytes(password),
+                RSAEncryptionPadding.Pkcs1));
         }
-        
+
         public static CaptchaData ParseCaptchaData(string mmtKey, GeeTestResult result)
         {
             return new CaptchaData(
@@ -110,6 +149,15 @@ namespace MiHoYoAuth
                 result.geetest_validate,
                 result.geetest_challenge
             );
+        }
+
+        public static string GetDeviceId(string? machineName)
+        {
+            var nameBytes = Encoding.UTF8.GetBytes(machineName ?? Environment.MachineName);
+            var guidBytes = new byte[16];
+            for (var i = 0; i < nameBytes.Length && i < guidBytes.Length; i++)
+                guidBytes[i] = nameBytes[i];
+            return new Guid(guidBytes).ToString();
         }
 
         private static Task<JToken> GetJson(string url, HttpContent postBody,
@@ -157,6 +205,10 @@ namespace MiHoYoAuth
             jTask.ContinueWith(t =>
                 t.Result[memberName]!);
 
+        private static Task<T> GetAsJsonObject<T>(this Task<JToken> jTask, string memberName) =>
+            jTask.ContinueWith(t =>
+                t.Result[memberName]!.ToObject<T>());
+
         private static Dictionary<string, string> ParseQrCodeUrl(string codeUrl)
         {
             var uri = new Uri(codeUrl);
@@ -172,6 +224,5 @@ namespace MiHoYoAuth
         private static readonly byte[] PublicKey =
             Convert.FromBase64String(
                 "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDDvekdPMHN3AYhm/vktJT+YJr7cI5DcsNKqdsx5DZX0gDuWFuIjzdwButrIYPNmRJ1G8ybDIF7oDW2eEpm5sMbL9zs\n9ExXCdvqrn51qELbqj0XxtMTIpaCHFSI50PfPpTFV9Xt/hmyVwokoOXFlAEgCn+Q\nCgGs52bFoYMtyi+xEQIDAQAB\n");
-
     }
 }

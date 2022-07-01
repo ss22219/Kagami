@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace MiHoYoAuth
+namespace MiHoYoAuth.Utils
 {
     public static class BuildFormBody
     {

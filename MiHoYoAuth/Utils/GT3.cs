@@ -3,22 +3,23 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using MiHoYoAuth.Dtos;
 using Newtonsoft.Json;
 
-namespace MiHoYoAuth
+namespace MiHoYoAuth.Utils
 {
     public static class GT3
     {
-        public static async Task<CaptchaData> GetGeetest()
+        public static async Task<CaptchaData> GetGeetest(string listenUrl = "http://localhost:5123")
         {
             var result = string.Empty;
             var mmtKey = string.Empty;
 
             var builder = WebApplication.CreateBuilder();
-            builder.Logging.AddFilter(level => false);
+            builder.Logging.AddFilter(_ => false);
             var app = builder.Build();
 
-            app.Urls.Add("http://localhost:5123");
+            app.Urls.Add(listenUrl);
 
             app.MapGet("/", async ctx =>
             {
@@ -47,7 +48,8 @@ namespace MiHoYoAuth
                 context.Request.BodyReader.AdvanceTo(readResult.Buffer.End);
                 await context.Request.BodyReader.CompleteAsync();
                 result = content;
-                app.StopAsync();
+                await context.Response.WriteAsJsonAsync(new { code = 200, message = "ok" });
+                app.StopAsync().ConfigureAwait(false);
             });
             await app.RunAsync();
             var geetest = JsonConvert.DeserializeObject<GeeTestResult>(result)!;

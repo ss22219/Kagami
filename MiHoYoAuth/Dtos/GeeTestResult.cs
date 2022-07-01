@@ -1,4 +1,4 @@
-namespace MiHoYoAuth
+namespace MiHoYoAuth.Dtos
 {
     public class GeeTestResult
     {

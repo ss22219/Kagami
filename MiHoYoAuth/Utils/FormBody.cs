@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+using MiHoYoAuth.Dtos;
 
-namespace MiHoYoAuth
+namespace MiHoYoAuth.Utils
 {
     public class FormBody
     {

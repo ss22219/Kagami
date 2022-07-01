@@ -14,9 +14,11 @@ using System.Threading.Tasks;
 using Konata.Core.Message.Model;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MiHoYoAuth;
+using MiHoYoAuth.Utils;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using ZXing;
 using Color = System.Drawing.Color;
 using JsonSerializer = System.Text.Json.JsonSerializer;
 using LogLevel = Konata.Core.Events.LogLevel;
@@ -28,11 +30,13 @@ public static class Program
     private static Bot _bot;
     private static ILoggerFactory _loggerFactory;
     private static HttpClient _httpClient;
+    private static MiAccount _miAccount;
 
     public static async Task Main()
     {
         _loggerFactory = LoggerFactory.Create(_ =>
             _.Services.AddLogging(option => option.AddConsole()));
+        _miAccount = await GetMiAccount();
         _bot = BotFather.Create(GetConfig(),
             GetDevice(), GetKeyStore());
         _httpClient = new HttpClient();
@@ -91,15 +95,30 @@ public static class Program
                 if (imageChain == null) return;
                 var bytes = await _httpClient.GetByteArrayAsync(imageChain.ImageUrl);
                 using var image = Image.Load<Rgba32>(bytes);
-                var rate = 50d / image.Width;
-                var height = image.Height * rate;
-                image.Mutate(x => x.Resize(50, (int)height));
-                _loggerFactory.CreateLogger("OnFriendMessage")
-                    .LogInformation(ConvertToAscii(image));
+                var barcodeReader = new ZXing.ImageSharp.BarcodeReader<Rgba32>();
+                var result = barcodeReader.Decode(image);
+                if (result.BarcodeFormat == BarcodeFormat.QR_CODE &&
+                    result.Text.StartsWith("https://user.mihoyo.com/qr_code_in_game.html"))
+                {
+                    if(_miAccount == null) return;
+                    await MiHoYoAPI.ScanQrCode(result.Text, _miAccount.DeviceId);
+                    var gameToken = await MiHoYoAPI.GetGameToken(_miAccount.Uid, _miAccount.SToken);
+                    await MiHoYoAPI.ConfirmQrCode(result.Text, _miAccount.Uid, gameToken, _miAccount.DeviceId);
+                    await _bot.SendFriendMessage(args.FriendUin, "扫码成功");
+                }
             }
             catch (Exception e)
             {
-                _loggerFactory.CreateLogger("OnFriendMessage").LogError(e.ToString());
+                if(e.Message == "ExpiredCode")
+                    await _bot.SendFriendMessage(args.FriendUin, "二维码过期了");
+                else if(e.Message == "InvalidStat")
+                    await _bot.SendFriendMessage(args.FriendUin, "二维码过期了");
+                else
+                {
+                    _loggerFactory.CreateLogger("OnFriendMessage").LogError(e.ToString());
+                    await _bot.SendFriendMessage(args.FriendUin, e.Message);
+                }
+
             }
         };
 
@@ -118,8 +137,44 @@ public static class Program
                     await _bot.Logout();
                     _bot.Dispose();
                     return;
+                case "/switch":
+                    _miAccount = null;
+                    File.Delete("mihoyo_account.json");
+                    await GetMiAccount();
+                    return;
             }
         }
+    }
+
+    private static async Task<MiAccount> GetMiAccount()
+    {
+        // Read the device from config
+        if (File.Exists("mihoyo_account.json"))
+        {
+            return JsonSerializer.Deserialize
+                <MiAccount>(File.ReadAllText("mihoyo_account.json"));
+        }
+
+        var miAccount = new MiAccount { DeviceId = Guid.NewGuid().ToString() };
+        Console.Write("Mihoyo Account: ");
+        var account = Console.ReadLine();
+
+        Console.Write("Password: ");
+        var password = Console.ReadLine();
+
+        Console.WriteLine("Open http://localhost:5123 to verify");
+        var captchaData = await GT3.GetGeetest();
+        var loginResult =
+            await MiHoYoAPI.LoginByPassword(account, MiHoYoAPI.EncryptedPassword(password), captchaData);
+        miAccount.Ticket = loginResult.Ticket;
+        miAccount.Uid = loginResult.Uid;
+
+        var multiTokenResult = await MiHoYoAPI.GetMultiTokenByLoginTicket(miAccount.Uid, miAccount.Ticket);
+        miAccount.LToken = multiTokenResult.LToken;
+        miAccount.SToken = multiTokenResult.SToken;
+        File.WriteAllText("mihoyo_account.json",
+            JsonSerializer.Serialize(miAccount, new JsonSerializerOptions { WriteIndented = true }));
+        return miAccount;
     }
 
 
@@ -177,7 +232,7 @@ public static class Program
         Console.WriteLine("For first running, please " +
                           "type your account and password.");
 
-        Console.Write("Account: ");
+        Console.Write("QQ Account: ");
         var account = Console.ReadLine();
 
         Console.Write("Password: ");
@@ -202,6 +257,7 @@ public static class Program
     }
 
     private static readonly string[] AsciiChars = { "#", "#", "@", "%", "=", "+", "*", ":", "-", ".", " " };
+
     private static string ConvertToAscii(Image<Rgba32> image)
     {
         Boolean toggle = false;
